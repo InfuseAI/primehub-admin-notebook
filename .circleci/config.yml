@@ -95,9 +95,9 @@ jobs:
             echo "2. Running jupyter-repo2docker..."
             set -x
             if docker pull "${CONTAINER_NAME}:${DOCKER_TAG}"; then
-              jupyter-repo2docker --debug --user-name jovyan --user-id 1000 --no-run --image-name "${CONTAINER_NAME}:${DOCKER_TAG}" --cache-from "${CONTAINER_NAME}:${DOCKER_TAG}" "${REPO_NAME}"
+              jupyter-repo2docker --debug --user-name jovyan --user-id 1000 --no-run --image-name "${CONTAINER_NAME}:${DOCKER_TAG}" --cache-from "${CONTAINER_NAME}:${DOCKER_TAG}" --ref "${CIRCLE_SHA1}" "${REPO_NAME}"
             else
-              jupyter-repo2docker --debug --user-name jovyan --user-id 1000 --no-run --image-name "${CONTAINER_NAME}:${DOCKER_TAG}" "${REPO_NAME}"
+              jupyter-repo2docker --debug --user-name jovyan --user-id 1000 --no-run --image-name "${CONTAINER_NAME}:${DOCKER_TAG}" --ref "${CIRCLE_SHA1}" "${REPO_NAME}"
             fi
             docker ps
             docker images
@@ -139,7 +139,7 @@ jobs:
          paths:
             - /tmp/cache/container.tar.gz
 
-  deploy:
+  deploy: &deploy
     machine:
       image: circleci/classic:201711-01
     working_directory: /tmp/src
@@ -180,6 +180,9 @@ jobs:
                   docker tag ${CONTAINER_NAME}:${DOCKER_TAG} ${CONTAINER_NAME}:latest
                   docker push ${CONTAINER_NAME}:latest
             fi
+  deploy_manually:
+    <<: *deploy
+
 workflows:
   version: 2
   build_deploy:
@@ -203,3 +206,15 @@ workflows:
           filters:
             branches:
               only: master
+
+      - hold:
+          filters:
+            tags:
+              only: /.*/
+          type: approval
+          requires:
+            - build
+
+      - deploy_manually:
+          requires:
+            - hold
