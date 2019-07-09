@@ -139,7 +139,7 @@ jobs:
          paths:
             - /tmp/cache/container.tar.gz
 
-  deploy:
+  deploy: &deploy
     machine:
       image: circleci/classic:201711-01
     working_directory: /tmp/src
@@ -180,6 +180,9 @@ jobs:
                   docker tag ${CONTAINER_NAME}:${DOCKER_TAG} ${CONTAINER_NAME}:latest
                   docker push ${CONTAINER_NAME}:latest
             fi
+  deploy_manually:
+    <<: *deploy
+
 workflows:
   version: 2
   build_deploy:
@@ -203,3 +206,16 @@ workflows:
           filters:
             branches:
               only: master
+
+      - hold:
+          filters:
+            tags:
+              only: /.*/
+          type: approval
+          requires:
+            - build
+
+      - deploy_manually:
+          requires:
+            - hold
+
