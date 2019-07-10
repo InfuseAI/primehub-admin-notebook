@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {resize_pod}
+  namespace: hub
+  labels:
+    app: resize-script
+spec:
+  containers:
+  - name: placeholder
+    image: {image}
+    command: ["tail", "-f", "/dev/null"]
+    volumeMounts:
+    - mountPath: /rbd-vol
+      name: vol
+  volumes:
+  - name: vol
+    persistentVolumeClaim:
+      claimName: {pvc_name}
