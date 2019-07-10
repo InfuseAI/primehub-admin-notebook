@@ -217,5 +217,5 @@ workflows:
 
       - deploy_manually:
           requires:
-            - hold
+            - confirm_deployment
 
