@@ -114,11 +114,13 @@ def to_bytes(value, unit):
     unit_value = dict(M=1024**2, G=1024**3, T=1024**4)
     return int(value) * unit_value[unit]
 
+def get_pv_by_volume_name(volume_name):
+    return Run("kubectl get pv {} -o json".format(volume_name)).json()
 
 def get_rbd_image_size(volumes, namespace='hub'):
     # for pvc in volume_list:
     for volume, attributes in volumes.items():
-        pv = Run("kubectl get pv {} -o json".format(attributes['volumeName'])).json()
+        pv = get_pv_by_volume_name(attributes['volumeName'])
         storageClass = pv['spec']['storageClassName']
         if storageClass == 'rook-block':
             stdout = Run('{} info replicapool/{}'.format(kubectl_rbd_cmd(),

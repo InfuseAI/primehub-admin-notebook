@@ -62,6 +62,16 @@ def check_new_size(group, new_size):
         print('Error: incorrect size: {}\n'.format(new_size))
         return False
 
+
+def resize_gke_pvc(pvc_name, new_size):
+    cmd = 'kubectl patch -n hub pvc %s --type merge --patch {"spec":{"resources":{"requests":{"storage":"%si"}}}}' % (pvc_name, new_size)
+    out, err = Run(cmd).communicate()
+    if err:
+        print('Error: %s' % err)
+        return False
+    print(out)
+    return True
+
 # Step: Resize Group Volume
 #   1. Check input
 #   2. Check nfs pv
@@ -72,21 +82,26 @@ def check_new_size(group, new_size):
 
 def resize_group_volume(pvc_name, new_size):
     usage_volumes = get_group_volume_usages(pvc_name)
-    group = usage_volumes.get('data-nfs-'+pvc_name+'-0', None)
+    group = usage_volumes.get(pvc_name, None)
     if not group:
         print('Error: not such Group Volume: {}\n'.format(pvc_name))
-        sys.exit(1)
+        return False
 
     if not check_new_size(group, str(new_size)):
         print('Error: size can only be increased:'.format(new_size))
         size, unit = group['usage']['data']
         print('       Current : {}{}'.format(size, unit))
         print('       New     : {}'.format(new_size))
-        sys.exit(1)
+        return False
 
-    resize_rbd_image(group, new_size)
+    pv = get_pv_by_volume_name(group['volumeName'])
+    storageClass = pv['spec']['storageClassName']
 
-    resize_rbd_filesystem(group)
+    if storageClass == 'rook-block':
+        resize_rbd_image(group, new_size)
+        resize_rbd_filesystem(group)
+    else:
+        resize_gke_pvc(pvc_name, new_size)
 
 # Step: Resize User Volume
 # check_input
@@ -113,14 +128,14 @@ def resize_user_volume(pvc_name, new_size):
         print('       New     : {}'.format(new_size))
         return False
 
-    pv = Run("kubectl get pv {} -o json".format(user['volumeName'])).json()
+    pv = get_pv_by_volume_name(user['volumeName'])
     storageClass = pv['spec']['storageClassName']
 
     if storageClass == 'rook-block':
         pod = get_user_volume_pod(pvc_name)
         if not pod:
             print('No pod found')
-            sys.exit(1)
+            return False
 
         user = {**user, **pod}
 
@@ -130,13 +145,7 @@ def resize_user_volume(pvc_name, new_size):
 
         return True
     else:
-        cmd = 'kubectl patch -n hub pvc %s --type merge --patch {"spec":{"resources":{"requests":{"storage":"%si"}}}}' % (pvc_name, new_size)
-        out, err = Run(cmd).communicate()
-        if err:
-            print('Error: %s' % err)
-            return False
-        print(out)
-        return True
+        return resize_gke_pvc(pvc_name, new_size)
 
 def _get_pod_info(pvc_name, namespace='hub', wait_for_running_count=5):
     m = {}
