@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: resize-volume-filesystem
+  namespace: primehub
+spec:
+  template:
+    metadata:
+      labels:
+        app: resize-script
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - {host}
+      containers:
+        - name: worker
+          image: {image}
+          command: ["/bin/bash", "-c", "echo $SCRIPT > /tmp/job.sh && /bin/bash /tmp/job.sh"]
+          volumeMounts:
+          - mountPath: /dev
+            name: dev
+          - mountPath: /sys/bus
+            name: sysbus
+          - mountPath: /var/lib/kubelet
+            name: kubelet
+          securityContext:
+            privileged: true
+          env:
+            - name: SCRIPT
+              value: |
+                  {resize_tool} {block_device};
+                  exit 0;
+      volumes:
+        - name: kubelet
+          hostPath:
+            path: /var/lib/kubelet
+        - name: dev
+          hostPath:
+            path: /dev
+        - name: sysbus
+          hostPath:
+            path: /sys/bus
+      restartPolicy: OnFailure
+

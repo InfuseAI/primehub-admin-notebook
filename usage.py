@@ -53,46 +53,51 @@ def get_hostname():
     return hostnames
 
 
-def get_nfs_pods(namespace='hub'):
+def get_nfs_pods(pod_name=None, namespace='hub'):
     """
     get pods
     {'dataset-dummy-1-rbd': {'host': 'k8s03'}}
     """
     hostnames = get_hostname()
-    result = Run('kubectl get pod -n {} -o json'.format(namespace)).json()
+    if pod_name:
+        result = [Run('kubectl get pod -n {} {} -o json'.format(namespace, pod_name)).json()]
+    else:
+        result = Run('kubectl get pod -n {} -o json'.format(namespace)).json()['items']
     m = {}
 
-    for pod in result['items']:
+    for pod in result:
         if pod['metadata']['name'].startswith('nfs-'):
             hostIP = pod['status']['hostIP']
             for volume in pod['spec']['volumes']:
-                if volume['name'] == 'mypvc':
+                if volume['name'] == 'data':
                     name = volume['persistentVolumeClaim']['claimName']
                     m[name] = dict(host=hostnames[hostIP],
                                    hostIP=hostIP, uid=pod['metadata']['uid'], pod_name=pod['metadata']['name'])
     return m
 
 
-def get_group_volume_list(namespace='hub'):
-    result = Run('kubectl get pvc -n {} -o json'.format(namespace)).json()
+def get_volume_list(pvc_name=None, namespace='hub'):
+    if pvc_name:
+        return [Run(
+            'kubectl get pvc -n {namespace} {pvc_name} -o json'.format(namespace=namespace, pvc_name=pvc_name)).json()]
+    return Run(
+            'kubectl get pvc -n {namespace} -o json'.format(namespace=namespace)).json()['items']
+
+def get_group_volume_list(pvc_name=None, namespace='hub'):
+    result = get_volume_list(pvc_name, namespace)
     m = {}
 
-    for pvc in result['items']:
+    for pvc in result:
         if pvc['status']['phase'] == 'Bound':
             name = pvc['metadata']['name']
             volumeName = pvc['spec']['volumeName']
-            if name.endswith("-rbd"):
+            if name.startswith("data-nfs-"):
                 m[name] = dict(volumeName=volumeName)
     return m
 
 
 def get_user_volume_list(pvc_name=None, namespace='hub'):
-    if pvc_name:
-        result = [Run(
-            'kubectl get pvc -n {namespace} {pvc_name} -o json'.format(namespace=namespace, pvc_name=pvc_name)).json()]
-    else:
-        result = Run(
-            'kubectl get pvc -n {namespace} -o json'.format(namespace=namespace)).json()['items']
+    result = get_volume_list(pvc_name, namespace)
     m = {}
 
     for pvc in result:
@@ -113,10 +118,16 @@ def to_bytes(value, unit):
 def get_rbd_image_size(volumes, namespace='hub'):
     # for pvc in volume_list:
     for volume, attributes in volumes.items():
-        stdout = Run('{} info replicapool/{}'.format(kubectl_rbd_cmd(),
-                                                     attributes['volumeName'])).output()
-        # we only care about the first char of [TGM]iB
-        usage_result = re.findall(r'size (\d+) ([TGM])i?B', stdout)
+        pv = Run("kubectl get pv {} -o json".format(attributes['volumeName'])).json()
+        storageClass = pv['spec']['storageClassName']
+        if storageClass == 'rook-block':
+            stdout = Run('{} info replicapool/{}'.format(kubectl_rbd_cmd(),
+                                                        attributes['volumeName'])).output()
+            # we only care about the first char of [TGM]iB
+            usage_result = re.findall(r'size (\d+) ([TGM])i?B', stdout)
+        else:
+            usage_result = re.findall(r'(\d+)([TGM])i?', pv['spec']['capacity']['storage'])
+
         if usage_result:
             size, unit = usage_result[0]
             volumes[volume]['usage'] = dict(
@@ -124,9 +135,10 @@ def get_rbd_image_size(volumes, namespace='hub'):
     return volumes
 
 
-def get_group_volume_usages():
-    pods = get_nfs_pods()
-    volumes = get_group_volume_list()
+def get_group_volume_usages(pvc_name=None):
+    # PVC will start with 'data-' prefix. NFS Pod name will be 'nfs-xxx-0'
+    pods = get_nfs_pods(pvc_name[5:])
+    volumes = get_group_volume_list(pvc_name)
     merged = {}
     for k in pods.keys():
         merged[k] = {**pods[k], **volumes[k]}

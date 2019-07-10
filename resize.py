@@ -60,7 +60,7 @@ def check_new_size(group, new_size):
         return (bytes > current_size)
     else:
         print('Error: incorrect size: {}\n'.format(new_size))
-        sys.exit(1)
+        return False
 
 # Step: Resize Group Volume
 #   1. Check input
@@ -71,8 +71,8 @@ def check_new_size(group, new_size):
 
 
 def resize_group_volume(pvc_name, new_size):
-    usage_volumes = get_group_volume_usages()
-    group = usage_volumes.get(pvc_name+'-rbd', None)
+    usage_volumes = get_group_volume_usages(pvc_name)
+    group = usage_volumes.get('data-nfs-'+pvc_name+'-0', None)
     if not group:
         print('Error: not such Group Volume: {}\n'.format(pvc_name))
         sys.exit(1)
@@ -104,26 +104,39 @@ def resize_user_volume(pvc_name, new_size):
 
     if not user:
         print('Error: not such User Volume: {}\n'.format(pvc_name))
-        sys.exit(1)
+        return False
 
     if not check_new_size(user, str(new_size)):
         print('Error: size can only be increased:'.format(new_size))
         size, unit = user['usage']['data']
         print('       Current : {}{}'.format(size, unit))
         print('       New     : {}'.format(new_size))
-        sys.exit(1)
+        return False
 
-    pod = get_user_volume_pod(pvc_name)
-    if not pod:
-        print('No pod found')
-        sys.exit(1)
+    pv = Run("kubectl get pv {} -o json".format(user['volumeName'])).json()
+    storageClass = pv['spec']['storageClassName']
 
-    user = {**user, **pod}
+    if storageClass == 'rook-block':
+        pod = get_user_volume_pod(pvc_name)
+        if not pod:
+            print('No pod found')
+            sys.exit(1)
 
-    resize_rbd_image(user, new_size)
+        user = {**user, **pod}
 
-    resize_rbd_filesystem(user)
+        resize_rbd_image(user, new_size)
 
+        resize_rbd_filesystem(user)
+
+        return True
+    else:
+        cmd = 'kubectl patch -n hub pvc %s --type merge --patch {"spec":{"resources":{"requests":{"storage":"%si"}}}}' % (pvc_name, new_size)
+        out, err = Run(cmd).communicate()
+        if err:
+            print('Error: %s' % err)
+            return False
+        print(out)
+        return True
 
 def _get_pod_info(pvc_name, namespace='hub', wait_for_running_count=5):
     m = {}
