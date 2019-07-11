@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import re
-from command import Run
+from .command import Run
 import json
 namespace = 'hub'
 
