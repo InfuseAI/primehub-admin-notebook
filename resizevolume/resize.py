@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 import re
+import os
 from subprocess import Popen, PIPE
 import json
-from command import Run
-from usage import *
+from .command import Run
+from .usage import *
 import sys
 import time
 namespace = 'hub'
 
+def get_cwd():
+    print(os.getcwd())
 
 def resize_rbd_image(group, new_size):
     print('[Resize RBD Image]')
@@ -31,7 +34,7 @@ def resize_rbd_filesystem(group):
     print('[Resize RBD FileSystem]')
     cmd = get_block_device(group['pod_name'])
 
-    with open("resize_filesystem.yaml", "r") as fh:
+    with open("resizevolume/resize_filesystem.yaml", "r") as fh:
         job_spec = fh.read().format(**{**group, **cmd})
         import io
         Run("kubectl delete job -n primehub resize-volume-filesystem")
@@ -183,7 +186,7 @@ def get_user_volume_pod(pvc_name, namespace='hub'):
 
     # Create temporarily pod
     print('[Create temporarily Pod for resizing]')
-    resize_pod = 'resize-user-volume-' + pod_name
+    resize_pod = 'resizevolume/resize-user-volume-' + pod_name
     with open("resize_user_volume_pod_spec.yaml", "r") as fh:
         pod_spec = fh.read().format(image=get_ceph_image(),
                                     resize_pod=resize_pod, pvc_name=pvc_name)
