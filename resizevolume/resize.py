@@ -186,7 +186,7 @@ def get_user_volume_pod(pvc_name, namespace='hub'):
 
     # Create temporarily pod
     print('[Create temporarily Pod for resizing]')
-    resize_pod = 'resizevolume/resize-user-volume-' + pod_name
+    resize_pod = 'resize-user-volume-' + pod_name
     with open("resizevolume/resize_user_volume_pod_spec.yaml", "r") as fh:
         pod_spec = fh.read().format(image=get_ceph_image(),
                                     resize_pod=resize_pod, pvc_name=pvc_name)
