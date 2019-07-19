@@ -9,7 +9,7 @@ jupyter labextension install @jupyter-widgets/jupyterlab-manager@^0.38.1
 jupyter labextension install @jupyterlab/toc
 
 # Notebooks w/ extensions that auto-run code must be "trusted" to work the first time
-jupyter trust index.ipynb
+jupyter trust index.md
 
 BUILD_PATH=/home/jovyan
 KUBECTL_VERSION=v1.12.7
