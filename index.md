@@ -149,3 +149,102 @@ Run the cell to apply generated yaml for dataset creation.
 ```python
 !! echo "{pv_type_dataset_yaml_string}" | kubectl -n hub apply -f -
 ```
+
+## Resize Group Volume
+Run the cell to render a dropdown list, select group volume to resize
+
+
+```python
+import ipywidgets
+from resizevolume.usage import *
+from resizevolume.resize import *
+
+group_volume = ipywidgets.Dropdown(
+    options=get_group_volume_list().keys(),
+    description='Group vol:',
+    disabled=False,
+)
+
+group_volume
+```
+
+Run the cell to render a input field of group volume size, specify a size for the group volume which we want to resize.
+
+
+```python
+usage = get_group_volume_usages(group_volume.value)
+
+num, unit = usage.get(group_volume.value).get('usage').get('data')
+
+new_usage = ipywidgets.BoundedIntText(    
+    value=num,
+    min=num,
+    max=9999,
+    step=1,
+    description='New Size:',
+    disabled=False)
+
+def resize_handler(self):
+    resize_group_volume(group_volume.value, str(new_usage.value) + unit)
+
+resize_btn = ipywidgets.Button(description="Update", button_style="danger")
+resize_btn.on_click(resize_handler)
+
+ipywidgets.HBox([
+    ipywidgets.Label(value="Current Size: %s %s" % (num, unit)),
+    new_usage, 
+    ipywidgets.Label(value=unit),
+    resize_btn])
+```
+
+## Resize User Volume
+Run the cell to render a dropdown list, select user volume to resize
+
+
+```python
+import ipywidgets
+from resizevolume.usage import *
+from resizevolume.resize import *
+
+user_volume = ipywidgets.Dropdown(
+    options=get_user_volume_list().keys(),
+    description='User vol:',
+    disabled=False,
+)
+""
+user_volume
+
+```
+
+Run the cell to render a input field of user volume size, specify a size for the user volume which we want to resize.
+
+
+```python
+usage = get_user_volume_usages(user_volume.value)
+
+num, unit = usage.get(user_volume.value).get('usage').get('data')
+
+new_usage = ipywidgets.BoundedIntText(    
+    value=num,
+    min=num,
+    max=9999,
+    step=1,
+    description='New Size:',
+    disabled=False)
+
+def resize_handler(self):
+    resize_user_volume(user_volume.value, str(new_usage.value) + unit)
+
+resize_btn = ipywidgets.Button(description="Update", button_style="danger")
+resize_btn.on_click(resize_handler)
+
+ipywidgets.HBox([
+    ipywidgets.Label(value="Current Size: %s %s" % (num, unit)), new_usage, 
+    ipywidgets.Label(value=unit), 
+    resize_btn])
+```
+
+
+```python
+
+```
