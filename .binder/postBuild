@@ -18,3 +18,5 @@ curl -sLo ${BUILD_PATH}/bin/kubectl "https://storage.googleapis.com/kubernetes-r
 
 export PATH="${BUILD_PATH}/bin:$PATH"
 
+cp jupyter_notebook_config.py ~/.jupyter/
+
