@@ -1,4 +1,6 @@
 jupyter contrib nbextension install --user
+jupyter nbextension install --py jupytext
+jupyter nbextension enable --py jupytext
 jupyter nbextension enable --py widgetsnbextension
 jupyter nbextension enable python-markdown/main
 jupyter nbextension enable toc2/main
