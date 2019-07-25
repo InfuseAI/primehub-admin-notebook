@@ -55,7 +55,7 @@ def execute(self):
         print("No selected PVC")
         return
 
-    mounted_by = !! ~/bin/kubectl -n hub describe pvc {pvc.value} | grep -o 'jupyter-.*'
+    mounted_by = !! ~/bin/kubectl -n hub describe pvc {pvc.value} | grep 'Mounted By:' | grep -v '<none>'
 
     if mounted_by:
         print("PVC %s can't be deleted because it's mounted by: %s" % (pvc.value, mounted_by[0]))
@@ -92,20 +92,20 @@ def execute(self):
         print("No selected PVC")
         return
 
-    mounted_by = !! ~/bin/kubectl -n hub describe pvc {pvc.value} | grep -o 'jupyter-.*'
+    mounted_by = ! ~/bin/kubectl -n hub describe pvc {pvc.value} | grep 'Mounted By:' | grep -v '<none>'
 
     if mounted_by:
         print("PVC %s can't be deleted because it's mounted by: %s" % (pvc.value, mounted_by[0]))
     else:
         print("Start to delete pvc %s ..." % pvc.value)
-        pvc_delete = !! ~/bin/kubectl -n hub delete pvc {pvc.value}
+        pvc_delete = ! ~/bin/kubectl -n hub delete pvc {pvc.value}
         print(pvc_delete)
         print("Start to delete sts pvc data-nfs-%s-0 ..." % pvc.value)
-        sts_pvc_delete = !! ~/bin/kubectl -n hub delete pvc data-nfs-{pvc.value}-0
+        sts_pvc_delete = ! ~/bin/kubectl -n hub delete pvc data-nfs-{pvc.value}-0
         print(sts_pvc_delete)
 
 
-dcdelete_btn = ipywidgets.Button(description="Delete", button_style="danger")
+delete_btn = ipywidgets.Button(description="Delete", button_style="danger")
 delete_btn.on_click(execute)
 
 ipywidgets.HBox([
