@@ -164,7 +164,7 @@ def _get_pod_info(pvc_name, namespace='hub', wait_for_running_count=5):
 
     if mount_by[-1] == '<none>':
         return None
-    pod_name = result.output().strip().split()[-1]
+    pod_name = mount_by[-1]
 
     pod = Run('kubectl get pod -o wide -n {namespace} {pod_name} -o json'.format(
         namespace=namespace, pod_name=pod_name)).json()
