@@ -201,7 +201,7 @@ def get_user_volume_pod(pvc_name, namespace='hub'):
         import io
         Run("kubectl delete job -n primehub resize-volume-filesystem")
         stdout, stderr = Popen(
-            "s apply -f -".split(' '), stdin=PIPE, stdout=PIPE).communicate(input=pod_spec.encode('utf8'))
+            "kubectl apply -f -".split(' '), stdin=PIPE, stdout=PIPE).communicate(input=pod_spec.encode('utf8'))
         time.sleep(5)
         # wait for pod started
         m = _get_pod_info(pvc_name)
