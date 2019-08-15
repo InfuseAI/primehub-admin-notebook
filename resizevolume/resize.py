@@ -151,12 +151,20 @@ def resize_user_volume(pvc_name, new_size):
         return resize_gke_pvc(pvc_name, new_size)
 
 def _get_pod_info(pvc_name, namespace='hub', wait_for_running_count=5):
+    if wait_for_running_count == 0:
+        return None
+
     m = {}
     result = Run('kubectl describe pvc -n {namespace} {pvc_name}'.format(
         namespace=namespace, pvc_name=pvc_name)).pipe('grep Mounted')
-    pod_name = result.output().strip().split()[-1]
-    if pod_name == '<none>':
+    mount_by = result.output().strip().split()
+    if mount_by == []:
+        time.sleep(3)
+        return _get_pod_info(pvc_name, namespace, wait_for_running_count - 1)
+
+    if mount_by[-1] == '<none>':
         return None
+    pod_name = mount_by[-1]
 
     pod = Run('kubectl get pod -o wide -n {namespace} {pod_name} -o json'.format(
         namespace=namespace, pod_name=pod_name)).json()
@@ -171,7 +179,7 @@ def _get_pod_info(pvc_name, namespace='hub', wait_for_running_count=5):
     while wait_for_running_count > 0:
         wait_for_running_count = wait_for_running_count - 1
         time.sleep(5)
-        return _get_pod_info(pod_name, namespace, wait_for_running_count)
+        return _get_pod_info(pvc_name, namespace, wait_for_running_count)
     print("Cannot get pod info")
     return None
 
@@ -194,7 +202,7 @@ def get_user_volume_pod(pvc_name, namespace='hub'):
         Run("kubectl delete job -n primehub resize-volume-filesystem")
         stdout, stderr = Popen(
             "kubectl apply -f -".split(' '), stdin=PIPE, stdout=PIPE).communicate(input=pod_spec.encode('utf8'))
-        time.sleep(1)
+        time.sleep(5)
         # wait for pod started
         m = _get_pod_info(pvc_name)
     return m
