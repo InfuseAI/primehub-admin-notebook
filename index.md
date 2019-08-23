@@ -91,7 +91,7 @@ def select_all_onclick(self):
         time.sleep(0.03)
     [check(w) for w in multi_checkbox.children[1].children]
 
-def reverse_select_onclick(self):
+def inverse_select_onclick(self):
     def check(x):
         x.value = not x.value
         time.sleep(0.03)
@@ -99,8 +99,8 @@ def reverse_select_onclick(self):
 
 select_all_btn = ipywidgets.Button(description="Select All", button_style="info", layout=ipywidgets.Layout(width='80px'), style=ipywidgets.ButtonStyle(button_color='#365abd'))
 select_all_btn.on_click(select_all_onclick)
-reverse_select_btn = ipywidgets.Button(description="Reverse", button_style="info", layout=ipywidgets.Layout(width='80px'), style=ipywidgets.ButtonStyle(button_color='#6490e8'))
-reverse_select_btn.on_click(reverse_select_onclick)
+inverse_select_btn = ipywidgets.Button(description="Inverse", button_style="info", layout=ipywidgets.Layout(width='80px'), style=ipywidgets.ButtonStyle(button_color='#6490e8'))
+inverse_select_btn.on_click(inverse_select_onclick)
 delete_btn = ipywidgets.Button(description="Delete", button_style="danger", layout=ipywidgets.Layout(width='80px'), style=ipywidgets.ButtonStyle(button_color='#d13a1f'))
 delete_btn.on_click(execute)
 multi_checkbox = multi_checkbox_widget(user_list)
@@ -108,7 +108,7 @@ multi_checkbox = multi_checkbox_widget(user_list)
 ipywidgets.HBox([
     multi_checkbox,
     select_all_btn,
-    reverse_select_btn,
+    inverse_select_btn,
     delete_btn
 ])
 ```
@@ -168,7 +168,7 @@ def select_all_onclick(self):
         time.sleep(0.03)
     [check(w) for w in multi_checkbox.children[1].children]
 
-def reverse_select_onclick(self):
+def inverse_select_onclick(self):
     def check(x):
         x.value = not x.value
         time.sleep(0.03)
@@ -176,8 +176,8 @@ def reverse_select_onclick(self):
 
 select_all_btn = ipywidgets.Button(description="Select All", button_style="info", layout=ipywidgets.Layout(width='80px'), style=ipywidgets.ButtonStyle(button_color='#365abd'))
 select_all_btn.on_click(select_all_onclick)
-reverse_select_btn = ipywidgets.Button(description="Reverse", button_style="info", layout=ipywidgets.Layout(width='80px'), style=ipywidgets.ButtonStyle(button_color='#6490e8'))
-reverse_select_btn.on_click(reverse_select_onclick)
+inverse_select_btn = ipywidgets.Button(description="Inverse", button_style="info", layout=ipywidgets.Layout(width='80px'), style=ipywidgets.ButtonStyle(button_color='#6490e8'))
+inverse_select_btn.on_click(inverse_select_onclick)
 delete_btn = ipywidgets.Button(description="Delete", button_style="danger", layout=ipywidgets.Layout(width='80px'), style=ipywidgets.ButtonStyle(button_color='#d13a1f'))
 delete_btn.on_click(execute)
 multi_checkbox = multi_checkbox_widget(group_pvcs)
@@ -185,7 +185,7 @@ multi_checkbox = multi_checkbox_widget(group_pvcs)
 ipywidgets.HBox([
     multi_checkbox,
     select_all_btn,
-    reverse_select_btn,
+    inverse_select_btn,
     delete_btn
 ])
 ```
