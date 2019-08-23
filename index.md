@@ -43,35 +43,74 @@ k.setup()
 Run the cell to render a dropdown list, select user pvc for deletion.
 
 ```python
-user_pvcs = !! kubectl get -l component=singleuser-storage  pvc -n hub -o jsonpath='{range.items[*]}{.metadata.name}{"\n"}{end}'
+import ipywidgets
+import time
 
-pvc = ipywidgets.Dropdown(
-    options=user_pvcs,
-    description='Target:',
-    disabled=False,
-)
+user_pvcs = ! kubectl get -l component=singleuser-storage  pvc -n hub -o jsonpath='{range.items[*]}{.metadata.name}{"\n"}{end}'
+user_list = [user[len('claim-'):] for user in user_pvcs]
+
+def multi_checkbox_widget(descriptions):
+    """ Widget with a search field and lots of checkboxes """
+    search_widget = ipywidgets.Text()
+    options_dict = {description: ipywidgets.Checkbox(description=description, value=False, layout=ipywidgets.Layout(height='20px')) for description in descriptions}
+    options = [options_dict[description] for description in descriptions]
+    options_widget = ipywidgets.VBox(options, layout={'overflow': 'scroll'})
+    multi_select = ipywidgets.VBox([search_widget, options_widget])
+
+    # Wire the search field to the checkboxes
+    def on_text_change(change):
+        search_input = change['new']
+        if search_input == '':
+            # Reset search field
+            new_options = [options_dict[description] for description in descriptions]
+        else:
+            matches = [x for x in descriptions if x.startswith(search_input)]
+            new_options = [options_dict[description] for description in matches]
+        options_widget.children = new_options
+
+    search_widget.observe(on_text_change, names='value')
+    return multi_select
+
 def execute(self):
-    if pvc.value is None:
-        print("No selected PVC")
-        return
+    selected_options = [w.description for w in multi_checkbox.children[1].children if w.value]
+    print('Start to delete %s pvc...' % len(selected_options))
 
-    mounted_by = !! ~/bin/kubectl -n hub describe pvc {pvc.value} | grep 'Mounted By:' | grep -v '<none>'
+    for user in selected_options:
+        pvc = 'claim-' + user
+        mounted_by = ! ~/bin/kubectl -n hub describe pvc {pvc} | grep 'Mounted By:' | grep -v '<none>'
 
-    if mounted_by:
-        print("PVC %s can't be deleted because it's mounted by: %s" % (pvc.value, mounted_by[0]))
-    else:
-        result = !! ~/bin/kubectl -n hub delete pvc {pvc.value}
-        print(result)
+        if mounted_by:
+            print("PVC %s can't be deleted because it's mounted by: %s" % (pvc, mounted_by[0]))
+        else:
+            ! ~/bin/kubectl -n hub delete pvc {pvc}
+    print('Completed')
 
+def select_all_onclick(self):
+    def check(x):
+        x.value = True
+        time.sleep(0.03)
+    [check(w) for w in multi_checkbox.children[1].children]
 
-delete_btn = ipywidgets.Button(description="Delete", button_style="danger")
+def inverse_select_onclick(self):
+    def check(x):
+        x.value = not x.value
+        time.sleep(0.03)
+    [check(w) for w in multi_checkbox.children[1].children]
+
+select_all_btn = ipywidgets.Button(description="Select All", button_style="info", layout=ipywidgets.Layout(width='80px'), style=ipywidgets.ButtonStyle(button_color='#365abd'))
+select_all_btn.on_click(select_all_onclick)
+inverse_select_btn = ipywidgets.Button(description="Inverse", button_style="info", layout=ipywidgets.Layout(width='80px'), style=ipywidgets.ButtonStyle(button_color='#6490e8'))
+inverse_select_btn.on_click(inverse_select_onclick)
+delete_btn = ipywidgets.Button(description="Delete", button_style="danger", layout=ipywidgets.Layout(width='80px'), style=ipywidgets.ButtonStyle(button_color='#d13a1f'))
 delete_btn.on_click(execute)
+multi_checkbox = multi_checkbox_widget(user_list)
 
 ipywidgets.HBox([
-    pvc,
-    delete_btn])
-
-
+    multi_checkbox,
+    select_all_btn,
+    inverse_select_btn,
+    delete_btn
+])
 ```
 
 ## Delete Group Volume
@@ -79,39 +118,76 @@ ipywidgets.HBox([
 Run the cell to render a dropdown list, select group volume pvc for deletion.
 
 ```python
+import ipywidgets
+import time
+
 group_pvcs = !! kubectl get pvc -n hub | grep 'hub-nfs-.*' | grep -v '^dataset-.*' | cut -d' ' -f1
 
-pvc = ipywidgets.Dropdown(
-    options=group_pvcs,
-    description='Target:',
-    disabled=False,
-)
+def multi_checkbox_widget(descriptions):
+    """ Widget with a search field and lots of checkboxes """
+    search_widget = ipywidgets.Text()
+    options_dict = {description: ipywidgets.Checkbox(description=description, value=False, layout=ipywidgets.Layout(height='20px')) for description in descriptions}
+    options = [options_dict[description] for description in descriptions]
+    options_widget = ipywidgets.VBox(options, layout={'overflow': 'scroll'})
+    multi_select = ipywidgets.VBox([search_widget, options_widget])
+
+    # Wire the search field to the checkboxes
+    def on_text_change(change):
+        search_input = change['new']
+        if search_input == '':
+            # Reset search field
+            new_options = [options_dict[description] for description in descriptions]
+        else:
+            matches = [x for x in descriptions if x.startswith(search_input)]
+            new_options = [options_dict[description] for description in matches]
+        options_widget.children = new_options
+
+    search_widget.observe(on_text_change, names='value')
+    return multi_select
 
 def execute(self):
-    if pvc.value is None:
-        print("No selected PVC")
-        return
+    selected_options = [w.description for w in multi_checkbox.children[1].children if w.value]
+    print('Start to delete %s pvc...' % len(selected_options))
+    for pvc in selected_options:
+        mounted_by = ! ~/bin/kubectl -n hub describe pvc {pvc} | grep 'Mounted By:' | grep -v '<none>'
 
-    mounted_by = ! ~/bin/kubectl -n hub describe pvc {pvc.value} | grep 'Mounted By:' | grep -v '<none>'
+        if mounted_by:
+            print("PVC %s can't be deleted because it's mounted by: %s" % (pvc, mounted_by[0]))
+        else:
+            print("Start to delete pvc %s ..." % pvc)
+            pvc_delete = ! ~/bin/kubectl -n hub delete pvc {pvc}
+            print(pvc_delete)
+            print("Start to delete sts pvc data-nfs-%s-0 ..." % pvc)
+            sts_pvc_delete = ! ~/bin/kubectl -n hub delete pvc data-nfs-{pvc}-0
+            print(sts_pvc_delete)
+    print('Completed')
 
-    if mounted_by:
-        print("PVC %s can't be deleted because it's mounted by: %s" % (pvc.value, mounted_by[0]))
-    else:
-        print("Start to delete pvc %s ..." % pvc.value)
-        pvc_delete = ! ~/bin/kubectl -n hub delete pvc {pvc.value}
-        print(pvc_delete)
-        print("Start to delete sts pvc data-nfs-%s-0 ..." % pvc.value)
-        sts_pvc_delete = ! ~/bin/kubectl -n hub delete pvc data-nfs-{pvc.value}-0
-        print(sts_pvc_delete)
+def select_all_onclick(self):
+    def check(x):
+        x.value = True
+        time.sleep(0.03)
+    [check(w) for w in multi_checkbox.children[1].children]
 
+def inverse_select_onclick(self):
+    def check(x):
+        x.value = not x.value
+        time.sleep(0.03)
+    [check(w) for w in multi_checkbox.children[1].children]
 
-delete_btn = ipywidgets.Button(description="Delete", button_style="danger")
+select_all_btn = ipywidgets.Button(description="Select All", button_style="info", layout=ipywidgets.Layout(width='80px'), style=ipywidgets.ButtonStyle(button_color='#365abd'))
+select_all_btn.on_click(select_all_onclick)
+inverse_select_btn = ipywidgets.Button(description="Inverse", button_style="info", layout=ipywidgets.Layout(width='80px'), style=ipywidgets.ButtonStyle(button_color='#6490e8'))
+inverse_select_btn.on_click(inverse_select_onclick)
+delete_btn = ipywidgets.Button(description="Delete", button_style="danger", layout=ipywidgets.Layout(width='80px'), style=ipywidgets.ButtonStyle(button_color='#d13a1f'))
 delete_btn.on_click(execute)
+multi_checkbox = multi_checkbox_widget(group_pvcs)
 
 ipywidgets.HBox([
-    pvc,
-    delete_btn])
-
+    multi_checkbox,
+    select_all_btn,
+    inverse_select_btn,
+    delete_btn
+])
 ```
 
 ## Cleanup released orphan PV
