@@ -190,6 +190,102 @@ ipywidgets.HBox([
 ])
 ```
 
+## Cleanup orphan PVC
+
+Run the cell to clean up orphan PVC.
+
+- Group pvc with no exist group
+- User pvc with no exist user
+- Dataset pvc with no dataset
+
+```python
+import ipywidgets
+import time
+
+from primehub.graphql import *
+from primehub.orphanDetector import *
+from primehub.notebookWidget import *
+
+url = !kubectl get deploy -n hub primehub-console-ui -o json | jq -r '.spec.template.spec.containers[0].env[] | select(.name == "CANNER_CMS_HOST") | .value'
+url = url[0] + '/graphql'
+secret = !kubectl get secret -n hub primehub-console-graphql-shared-secret -o jsonpath='{.data.graphql-secret}' | base64 -d
+secret = secret[0]
+primehub_info = get_primehub_info(url, secret)
+
+datasets=primehub_info.get('datasets')
+groups=primehub_info.get('groups')
+users=primehub_info.get('users')
+
+dataset_pvcs = !kubectl get pvc -n hub | grep hub-nfs-dataset | cut -d' ' -f1
+group_pvcs = !kubectl get pvc -n hub | grep hub-nfs-project | cut -d' ' -f1
+user_pvcs = !kubectl get pvc -n hub | grep claim- | cut -d' ' -f1
+deleted_pvc_list = []
+
+# Clean dataset
+for pvc in dataset_pvcs:
+    if is_orphan_dataset(datasets, pvc):
+        deleted_pvc_list.append(pvc)
+
+# Clean group
+for pvc in group_pvcs:
+    if is_orphan_group(groups, pvc):
+        deleted_pvc_list.append(pvc)
+
+# Clean user
+for pvc in user_pvcs:
+    if is_orphan_user(users, pvc):
+        deleted_pvc_list.append(pvc)
+
+# Clean orphan sts pvc
+sts_pvc = !kubectl get pvc -n hub | grep '^data-nfs-' | cut -d' ' -f1
+for sts in sts_pvc:
+    name = sts[len('data-nfs-'):-len('-0')]
+    nfs_pvc = !kubectl get pvc -n hub | grep ' hub-nfs-' | grep $name
+    if not nfs_pvc:
+        deleted_pvc_list.append(sts)
+
+def execute(self):
+    selected_options = [w.description for w in multi_checkbox.children[1].children if w.value]
+    print('Start to delete %s pvc...' % len(selected_options))
+    for pvc in selected_options:
+        mounted_by = ! ~/bin/kubectl -n hub describe pvc {pvc} | grep 'Mounted By:' | grep -v '<none>'
+
+        if mounted_by:
+            print("PVC %s can't be deleted because it's mounted by: %s" % (pvc, mounted_by[0]))
+        else:
+            print("Start to delete pvc %s ..." % pvc)
+            pvc_delete = ! ~/bin/kubectl -n hub delete pvc {pvc}
+            print(pvc_delete)
+    print('Completed')
+
+def select_all_onclick(self):
+    def check(x):
+        x.value = True
+        time.sleep(0.03)
+    [check(w) for w in multi_checkbox.children[1].children]
+
+def inverse_select_onclick(self):
+    def check(x):
+        x.value = not x.value
+        time.sleep(0.03)
+    [check(w) for w in multi_checkbox.children[1].children]
+
+select_all_btn = ipywidgets.Button(description="Select All", button_style="info", layout=ipywidgets.Layout(width='80px'),style=ipywidgets.ButtonStyle(button_color='#365abd'))
+select_all_btn.on_click(select_all_onclick)
+inverse_select_btn = ipywidgets.Button(description="Inverse", button_style="info", layout=ipywidgets.Layout(width='80px'),style=ipywidgets.ButtonStyle(button_color='#6490e8'))
+inverse_select_btn.on_click(inverse_select_onclick)
+delete_btn = ipywidgets.Button(description="Delete", button_style="danger", layout=ipywidgets.Layout(width='80px'),style=ipywidgets.ButtonStyle(button_color='#d13a1f'))
+delete_btn.on_click(execute)
+multi_checkbox = multi_checkbox_widget(deleted_pvc_list)
+
+ipywidgets.HBox([
+    multi_checkbox,
+    select_all_btn,
+    inverse_select_btn,
+    delete_btn
+])
+```
+
 ## Cleanup released orphan PV
 
 Run the cell to render a list, select delete button to delete orphan PV.
