@@ -27,7 +27,7 @@ k.setup()
 ## Maintenance Notebook Controller
 
 ```python
-from primehub.notebookinfra import *
+from primehub.notebookInfra import *
 display_maintenance_tab()
 ```
 
