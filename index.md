@@ -24,6 +24,13 @@ k.test()
 k.setup()
 ```
 
+## Maintenance Notebook Controller
+
+```python
+from primehub.notebookinfra import *
+display_maintenance_tab()
+```
+
 ## Check version and cluster health
 
 ```python
