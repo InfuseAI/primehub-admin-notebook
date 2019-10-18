@@ -1,7 +1,7 @@
 
 # Kubernetes Management Tasks
 
-This is a demo notebook for common kubernetes tasks.
+This is a notebook for common kubernetes tasks.
 
 *Note: You should be aware of where and how the jupyter session is running, as kubernetes credentials are sensitive information and leakage posts security risks.*
 
@@ -26,9 +26,11 @@ k.setup()
 
 ## Maintenance Notebook Controller
 
+The following section is used to reset the maintenance notebook. If you accidentally modify the content of this notebook and want to reset it, please use `Reset Notebook` button to reset the notebook. Otherwise, you can just skip to the next section.
+
 ```python
 from primehub.notebookInfra import *
-display_maintenance_tab()
+show_maintenance_notebook_controller()
 ```
 
 ## Check version and cluster health

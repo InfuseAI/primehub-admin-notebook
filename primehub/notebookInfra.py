@@ -1,12 +1,13 @@
 import os
 import ipywidgets
 
-def display_maintenance_tab():
+def show_maintenance_notebook_controller():
+    notebook_path = os.path.join(os.getenv("HOME"), 'index.md')
     def lock_repo():
-        os.chmod(os.path.join(os.getenv("HOME"), 'index.md'), 0o444)
+        os.chmod(notebook_path, 0o444)
 
     def unlock_repo():
-        os.chmod(os.path.join(os.getenv("HOME"), 'index.md'), 0o644)
+        os.chmod(notebook_path, 0o644)
 
     def protection_mode_change(change):
         if change['new'] != change['old']:
@@ -17,7 +18,7 @@ def display_maintenance_tab():
         print('Mode changed!')
 
     # Protection Mode
-    dev_stat = os.access(os.path.join(os.getenv("HOME"), 'index.md'), os.W_OK)
+    dev_stat = os.access(notebook_path, os.W_OK)
     if dev_stat: # Dev mode
         current_mode = 'Dev'
     else:        # Protected mode
@@ -27,8 +28,9 @@ def display_maintenance_tab():
         description='Mode:',
         value=current_mode
     )
+    protection_mode_label = ipywidgets.Label(value='To tweak the notebook by yourself, please switch to Dev mode.')
     protection_mode_buttons.observe(protection_mode_change, 'value')
-    protection_tab = ipywidgets.VBox(children=[protection_mode_buttons])
+    protection_tab = ipywidgets.VBox(children=[protection_mode_label, protection_mode_buttons])
 
     # Restart Notebook
     def kill_notebook_pod(self):
@@ -36,10 +38,10 @@ def display_maintenance_tab():
         cmd='kubectl delete pod -n hub -l app.kubernetes.io/name=admin-notebook'
         os.system(cmd)
     
-    restart_label_1 = ipywidgets.Label(value='To reset the notebook back to default value, please click the follwoing button.')
+    restart_label = ipywidgets.Label(value='To reset the notebook back to default value, please click the reset button.')
     restart_button = ipywidgets.Button(description="Reset Notebook", button_style="danger")
     restart_button.on_click(kill_notebook_pod)
-    restart_notebook_tab = ipywidgets.VBox(children=[restart_label_1,restart_button])
+    restart_notebook_tab = ipywidgets.VBox(children=[restart_label,restart_button])
 
     tab = ipywidgets.Tab(children=[restart_notebook_tab, protection_tab])
     tab.set_title(0, 'Restart Notebook')
