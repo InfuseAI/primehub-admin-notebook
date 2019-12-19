@@ -216,7 +216,7 @@ from primehub.orphanDetector import *
 from primehub.notebookWidget import *
 
 url = !kubectl get deploy -n hub primehub-console-ui -o json | jq -r '.spec.template.spec.containers[0].env[] | select(.name == "CANNER_CMS_HOST") | .value'
-url = url[0] + '/graphql'
+url = url[0] + '/api/graphql'
 secret = !kubectl get secret -n hub primehub-console-graphql-shared-secret -o jsonpath='{.data.graphql-secret}' | base64 -d
 secret = secret[0]
 primehub_info = get_primehub_info(url, secret)
