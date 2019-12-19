@@ -1,8 +1,5 @@
 import requests
 
-payload = {'query': '{groups{name enabledSharedVolume} datasets{name type volumeName} users{username}}'}
-headers = {'Authorization': 'Bearer %s'%secret}
-
 def get_primehub_info(url, secret):
     payload = {'query': '{groups{name enabledSharedVolume} datasets{name type volumeName} users{username}}'}
     headers = {'Authorization': 'Bearer %s'%secret}
