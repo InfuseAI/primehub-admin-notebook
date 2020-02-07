@@ -1,0 +1,1738 @@
+#!/bin/bash
+
+kcadm::error() {
+  >&2 echo "$@"
+}
+
+kcadm::require_env() {
+  name=$1
+  if [[ -z ${!name:+x} ]]; then
+    kcadm::error "require env $name"
+    return 1
+  fi
+}
+
+# Make the key jq compatible
+json::modify_key() {
+  local -a comp
+  local key=''
+
+  IFS='.' read -r -a comp <<<"$1"
+  for (( i=0; i<${#comp[@]}; i++ )); do
+    key+="[\"${comp[i]}\"]"
+  done
+  echo "$key"
+}
+
+# Make the value jq compatible
+json::modify_value() {
+  local value=$1
+  local prefix=${value:0:1}
+
+  if [[ -z "$value" ]]; then
+    # empty -> null
+    echo null
+  elif [[ $prefix == '[' || "${value:0:1}" == '{' ]]; then
+    # array or object
+    echo "$value"
+  elif [[ "${value:0:1}" == "'" ]]; then
+    # single quote -> double quote
+    echo "\"$(echo "$value" | tr -d "'")\""
+  elif [[ "${value:0:1}" == "\"" ]]; then
+    # double quote
+    echo "$value"
+  else
+    # unquote -> double quote
+    echo "\"${value}\""
+  fi
+}
+
+# Set item to an attribute
+# usage: json::append <name> <item>
+#
+# Input
+#   json
+# Output
+#   json
+json::set() {
+  local key="$(json::modify_key $1)"
+  local value="$(json::modify_value $2)"
+
+  jq -c ".${key} = ${value}"
+}
+
+# Append item to list attribute
+# usage: json::append <name> <item>
+#
+# Input
+#   json
+# Output
+#   json
+json::append() {
+  local key="$(json::modify_key $1)"
+  local value="$(json::modify_value $2)"
+
+  jq -c ".${key} |= . + [${value}]"
+}
+
+# Delete the attribute in json
+# usage: json::delete <name>
+#
+# Input
+#   json
+# Output
+#   json
+json::delete() {
+  local key="$(json::modify_key $1)"
+
+  jq -c "del(.${key})"
+}
+
+# Delete the attribute in json
+# usage: json::merge json1 json2
+#
+# Output
+#   json
+#
+# See https://stackoverflow.com/a/24904276/563353
+json::merge() {
+  echo "${1}${2}" | jq -c --slurp '.[0] * .[1]'
+}
+
+# curl::parse_response <message>
+#
+# parse the output of the following curl command
+# $ curl -sL -D - <url>
+# Here it will output the whole http response
+#
+# Input
+#   Http response. e.g.
+#   ```
+#   HTTP/1.1 200 OK
+#   Date: Sat, 10 Aug 2019 08:21:30 GMT
+#   Expires: -1
+#   Cache-Control: private, max-age=0
+#
+#   <HTTP Body>
+#   ```
+#
+# Output
+#   The body of http
+#
+# Stderr
+#   Status Code + Status Message, e.g.
+#   '404 Not found'
+#
+# Exit Code
+#   0, HTTP Status 2xx
+#   1, HTTP Status 4xx, 5xx
+curl::parse_response() {
+  local exitcode=0
+  local http_protocol
+  local http_status
+  local http_message
+
+  while true; do
+    read -r http_protocol http_status http_message
+    while read -r line; do
+      if [[ -z $(echo "$line" | tr -d '\n\r') ]]; then
+        break
+      fi
+    done
+
+    # check if it is 1xx or 3xx. If yes, should continue to parse next http response's header
+    if [[ ! ${http_status} =~ [13].. ]]; then
+      break;
+    fi
+  done
+  if [[ ! "${http_status}" =~ 2.. ]]; then
+    kcadm::error "$http_status $http_message"
+    exitcode=1
+  fi
+  cat
+
+  return $exitcode
+}
+
+kcadm::login() {
+  local server
+  local realm
+  local user
+  local password
+  local client
+  local secret
+  local -a options
+
+  # Parse the options
+  while [[ $# -gt 0 ]]
+  do
+  key="$1"
+  case "$key" in
+      --server)
+        server="$2"
+        shift; shift
+        ;;
+      --realm)
+        realm="$2"
+        shift; shift
+        ;;
+      --user)
+        user="$2"
+        shift; shift
+        ;;
+      --password)
+        password="$2"
+        shift; shift
+        ;;
+      --client)
+        client="$2"
+        shift; shift
+        ;;
+      --secret)
+        secret="$2"
+        shift; shift;
+        ;;
+      -h|--help)
+        kcadm::config_help
+        shift;
+        ;;
+      *)    # unknown option
+        positional+=("$1") # save it in an array for later
+        shift # past argument
+        ;;
+  esac
+  done
+
+  options+=('-H' 'Content-Type: application/x-www-form-urlencoded; charset=utf-8')
+  if [[ -n "$client" ]]; then
+    echo "Logging into ${server} as service-account-${client} of realm ${realm}"
+
+    if [[ -z "${secret:+x}" ]]; then
+      read -p "Enter client secret: " -s secret
+      echo
+    fi
+
+    options+=('--data-urlencode' 'grant_type=client_credentials')
+    options+=('--data-urlencode' "client_id=${client}")
+    options+=('--data-urlencode' "client_secret=${secret}")
+  else
+    echo "Logging into ${server} as user ${user} of realm ${realm}"
+
+    if [[ -z ${user} ]]; then
+      kcadm::error "user not specified"
+      return 1
+    fi
+
+    if [[ -z ${password:+x} ]]; then
+      read -p "Enter password: " -s password
+      echo
+    fi
+
+    options+=('--data-urlencode' 'grant_type=password')
+    options+=('--data-urlencode' 'client_id=admin-cli')
+    options+=('--data-urlencode' "username=${user}")
+    options+=('--data-urlencode' "password=${password}")
+  fi
+
+  # execute curl
+  local curl_response
+  curl_response=$(curl -s -D - -X "POST" "${server}/realms/${realm}/protocol/openid-connect/token" "${options[@]}")
+  if [[ $? -ne 0 ]]; then
+    kcadm::error "unknown error"
+    return $exit_code
+  fi
+
+  result=$(curl::parse_response <<<"$curl_response")
+  if [[ $? -ne 0 ]]; then
+    echo "$result" | jq -r .error_description >&2
+    return 1
+  fi
+
+  # login information
+  KCADM_SERVER_URL=$server
+  KCAMD_LOGIN_REALM=$realm
+  KCADM_LOGIN_CLIENT=$client
+
+  # tokens
+  KCADM_ACCESS_TOKEN=$(echo "$result" | jq -r ".access_token")
+  KCADM_REFRESH_TOKEN=$(echo "$result" | jq -r ".refresh_token")
+
+  # expires
+  local now=$(date +%s)
+  local expires_in=$(echo "$result" | jq -r ".expires_in")
+  local refresh_expire_in=$(echo "$result" | jq -r ".refresh_expires_in")
+  KCADM_ACCESS_TOKEN_EXPIRED=$((now + expires_in))
+  KCADM_REFRESH_TOKEN_EXPIRED=$((now + refresh_expire_in))
+
+  kcadm::save_config
+}
+
+
+kcadm::refresh_token () {
+  local client="admin-cli"
+
+  local curl_result
+  curl_response=$(curl -s -D - -X "POST" "${KCADM_SERVER_URL}/realms/${KCAMD_LOGIN_REALM}/protocol/openid-connect/token" \
+    -H 'Content-Type: application/x-www-form-urlencoded; charset=utf-8' \
+    --data-urlencode "grant_type=refresh_token" \
+    --data-urlencode "refresh_token=${KCADM_REFRESH_TOKEN}" \
+    --data-urlencode "client_id=${client}")
+  if [[ $? -ne 0 ]]; then
+    kcadm::error "unknown error"
+    return $exit_code
+  fi
+
+  result=$(curl::parse_response <<<"$curl_response")
+  if [[ $? -ne 0 ]]; then
+    return $?
+  fi
+
+  # tokens
+  KCADM_ACCESS_TOKEN=$(echo "$result" | jq -r ".access_token")
+  KCADM_REFRESH_TOKEN=$(echo "$result" | jq -r ".refresh_token")
+
+  # expires
+  local now=$(date +%s)
+  local expires_in=$(echo "$result" | jq -r ".expires_in")
+  local refresh_expire_in=$(echo "$result" | jq -r ".refresh_expires_in")
+  KCADM_ACCESS_TOKEN_EXPIRED=$((now + expires_in))
+  KCADM_REFRESH_TOKEN_EXPIRED=$((now + refresh_expire_in))
+
+  kcadm::save_config
+}
+
+kcadm::save_config() {
+  mkdir -p ~/.keycloak
+  cat > ~/.keycloak/kcadm.config <<KCADMCONFIG
+{
+    "serverUrl" : "${KCADM_SERVER_URL}",
+    "realm" : "${KCAMD_LOGIN_REALM}",
+    "endpoints" : {
+      "${KCADM_SERVER_URL}" : {
+        "${KCAMD_LOGIN_REALM}" : {
+          "clientId" : "${KCADM_LOGIN_CLIENT}",
+          "token" : "${KCADM_ACCESS_TOKEN}",
+          "refreshToken" : "${KCADM_REFRESH_TOKEN}",
+          "expiresAt" : ${KCADM_ACCESS_TOKEN_EXPIRED},
+          "refreshExpiresAt" : ${KCADM_REFRESH_TOKEN_EXPIRED}
+      }
+    }
+  }
+}
+KCADMCONFIG
+}
+
+kcadm::ensure_token() {
+  local now=$(date +%s)
+
+  if [[ ! -f ~/.keycloak/kcadm.config ]]; then
+    return 1
+  fi
+
+  local config=$(cat ~/.keycloak/kcadm.config)
+  local server=$(echo "${config}" | jq -r .serverUrl )
+  local realm=$(echo "${config}" | jq -r .realm )
+  local login=$(echo "${config}" | jq ".endpoints[\"${server}\"][\"${realm}\"]" )
+
+
+  KCADM_SERVER_URL=${server}
+  KCAMD_LOGIN_REALM=${realm}
+  KCADM_LOGIN_CLIENT=$(echo "${login}" | jq -r ".clientId")
+  KCADM_ACCESS_TOKEN=$(echo "${login}" | jq -r ".token")
+  KCADM_REFRESH_TOKEN=$(echo "${login}" | jq -r ".refreshToken")
+  KCADM_ACCESS_TOKEN_EXPIRED=$(echo "${login}" | jq -r ".expiresAt")
+  KCADM_REFRESH_TOKEN_EXPIRED=$(echo "${login}" | jq -r ".refreshExpiresAt")
+
+  if (( now < $KCADM_ACCESS_TOKEN_EXPIRED - 2 )); then
+    return 0
+  elif (( now < $KCADM_REFRESH_TOKEN_EXPIRED )); then
+    kcadm::refresh_token
+    return $?
+  else
+    kcadm::error "token expired"
+    kcadm::logout
+    return 1
+  fi
+}
+
+
+kcadm::logout () {
+  unset KCADM_SERVER_URL
+  unset KCAMD_LOGIN_REALM
+  unset KCADM_ACCESS_TOKEN
+  unset KCADM_REFRESH_TOKEN
+  unset KCADM_ACCESS_TOKEN_EXPIRED
+  unset KCADM_REFRESH_TOKEN_EXPIRED
+}
+
+kcadm::config() {
+  local command=$1
+  shift
+
+  case $command in
+    credentials)
+      kcadm::login "$@"
+      ;;
+    *)
+      kcadm::config_help
+  esac
+}
+
+kcadm::config_help() {
+  cat \
+<<'EOF'
+Usage: kcadm config credentials [ARGUMENTS]
+
+Command to manage the login credentials
+
+Arguments
+
+  --server SERVER_URL     Server endpoint url (e.g. 'http://localhost:8080/auth')
+  --realm REALM           Realm name to use
+  --user USER             Username to login with
+  --password PASSWORD     Password to login with (prompted for if not specified and --user is used)
+  --client CLIENT_ID      ClientId used by this client tool ('admin-cli' by default)
+  --secret SECRET         Secret to authenticate the client
+
+Examples
+
+Login specifying a password through command line:
+  $ kcadm.sh config credentials --server http://localhost:8080/auth --realm master --user admin --password adminpassowrd
+
+Login using a client service account of a custom client:
+  $ kcadm.sh config credentials --server http://localhost:8080/auth --realm master --client reg-cli --secret clientsecet
+
+EOF
+
+  exit 0
+}
+
+kcadm::request_help() {
+  method=$1
+
+  if [[ $method == "create" ]]; then
+    echo 'Usage: kcadm create ENDPOINT_URI [ARGUMENTS]'
+    echo
+    echo 'Command to create new resources on the server'
+  elif [[ $method == "get" ]]; then
+    echo 'Usage: kcadm get ENDPOINT_URI [ARGUMENTS]'
+    echo
+    echo 'Command to get resources on the server'
+  elif [[ $method == "update" ]]; then
+    echo 'Usage: kcadm update ENDPOINT_URI [ARGUMENTS]'
+    echo
+    echo 'Command to update resources on the server'
+  elif [[ $method == "delete" ]]; then
+    echo 'Usage: kcadm delete ENDPOINT_URI [ARGUMENTS]'
+    echo
+    echo 'Command to delete resources on the server'
+  fi
+  echo
+
+  # Arguments
+  echo "Arguments"
+  echo
+  echo "  ENDPOINT_URI              URI used to compose a target resource url. Commonly used values are:"
+  echo "                            realms, users, roles, groups, clients, keys, serverinfo, components ..."
+  echo "                            If it starts with 'http://' then it will be used as target resource url"
+  echo "  -r, --target-realm REALM  Target realm to issue requests against if not the one authenticated against"
+  echo "  -q, --query NAME=VALUE    Add to request URI a NAME query parameter with value VALUE"
+  echo "  -h, --header NAME=VALUE   Set request header NAME to VALUE"
+
+  if [[ $method == "get" ]]; then
+  echo "      --offset OFFSET       Set paging offset - adds a query parameter 'first' which some endpoints recognize"
+  echo "      --limit LIMIT         Set limit to number of items in result - adds a query parameter 'max'"
+  echo "                            which some endpoints recognize"
+  fi
+
+  if [[ $method == "create" || $method == "update" || $method == "delete" ]]; then
+  echo "  -s, --set NAME=VALUE      Set a specific attribute NAME to a specified value VALUE"
+  fi
+
+  if [[ $method == "update" ]]; then
+  echo "          NAME+=VALUE       Add item VALUE to list attribute NAME  "
+  fi
+
+  if [[ $method == "create" || $method == "update" || $method == "delete" ]]; then
+  echo "  -d, --delete NAME         Remove a specific attribute NAME from JSON request body"
+  echo "  -f, --file FILENAME       Read object from file or standard input if FILENAME is set to '-'"
+  echo "  -b, --body CONTENT        Content to be sent as-is or used as a JSON object template"
+  echo "  -o, --output              Output response to standard output"
+  fi
+
+  if [[ $method == "update" ]]; then
+  echo "  -m, --merge               Merge new values with existing configuration on the server"
+  echo "                            Merge is automatically enabled unless --file is specified"
+  echo "  -n, --no-merge            Suppress merge mode"
+  fi
+
+  if [[ $method == "create" ]]; then
+  echo "  -i, --id                  After creation only print id of the new resource to standard output"
+  fi
+  echo
+  echo "Examples"
+  echo
+
+  if [[ $method == "create" ]]; then
+    cat \
+<<EOF
+Create a new realm:
+  $ kcadm create realms -s realm=demorealm -s enabled=true
+
+Create a new realm role in realm 'demorealm' returning newly created role:
+  $ kcadm create roles -r demorealm -s name=manage-all -o
+
+Create a new client using configuration read from standard input:
+  $ kcadm create clients -r demorealm  -f - << EOF
+  {
+    "clientId": "my_client"
+  }
+  EOF
+
+Create a new group using configuration JSON passed as 'body' argument:
+  $ kcadm create groups -r demorealm -b '{ "name": "Admins" }'
+
+Create a client using file as a template, and override some attributes - return an 'id' of new client:
+  $ kcadm create clients -r demorealm -f my_client.json -s clientId=my_client2 -s 'redirectUris=["http://localhost:8980/myapp/*"]' -i
+
+Create a new client role for client my_client in realm 'demorealm' (replace ID with output of previous example command):
+  $ kcadm create clients/ID/roles -r demorealm -s name=client_role
+
+EOF
+  fi
+
+  if [[ $method == "get" ]]; then
+    cat \
+<<EOF
+Get all realms:
+  $ kcadm get realms
+
+Get 'demorealm':
+  $ kcadm get realms/demorealm
+
+Get adapter configuration for the client (replace ID with client's 'id'):
+  $ kcadm get clients/ID/installation/providers/keycloak-oidc-keycloak-json -r demorealm
+
+Get first 100 users at the most:
+  $ kcadm get users -r demorealm --offset 0 --limit 100
+
+Get all users whose 'username' matches '*test*' pattern, and 'email' matches '*@google.com*':
+  $ kcadm get users -r demorealm -q username=test -q email=@google.com
+
+Note: it is the 'users' endpoint that interprets query parameters 'username', and 'email' in such a way that
+it results in the described semantics. Another endpoint may provide a different semantics.
+
+EOF
+  fi
+
+  if [[ $method == "update" ]]; then
+    cat \
+<<EOF
+Update a target realm by fetching current configuration from the server, and applying specified changes
+  $ kcadm update realms/demorealm -s registrationAllowed=true
+
+Update a client by overwriting existing configuration using local file as a template (replace ID with client's 'id'):
+  $ kcadm update clients/ID -f new_my_client.json -s 'redirectUris=["http://localhost:8080/myapp/*"]'
+
+Reset user's password (replace ID with user's 'id'):
+  $ kcadm update users/ID/reset-password -r demorealm -s type=password -s value=NEWPASSWORD -s temporary=true -n
+
+EOF
+  fi
+
+  if [[ $method == "delete" ]]; then
+    cat \
+<<EOF
+Delete a realm role:
+  $ kcadm.sh delete roles/manage-all -r demorealm
+
+Delete a user (replace USER_ID with the value of user's 'id' attribute):
+  $ kcadm.sh delete users/USER_ID -r demorealm
+
+EOF
+  fi
+
+  exit 0
+}
+
+kcadm::request () {
+  local method=$1
+  shift
+
+  local -a positional
+  local -a options
+  local -a queries
+  local -a attributes
+  local -a deletes
+  local realm
+  local json
+  local debug
+  local return_id=false
+  local output_result=false
+  local file
+  local body
+  local merge
+  local no_merge
+
+  local curl_response
+  local exit_code
+  local result
+
+  # Get the request method
+  case $method in
+      create)
+        options+=("-X" "POST")
+        options+=('-H' 'Content-Type: application/json')
+        ;;
+      get)
+        options+=('-H' 'Content-Type: application/x-www-form-urlencoded; charset=utf-8')
+        ;;
+      update)
+        options+=("-X" "PUT")
+        options+=('-H' 'Content-Type: application/json')
+        ;;
+      delete)
+        options+=("-X" "DELETE")
+        options+=('-H' 'Content-Type: application/json')
+        ;;
+      *)    # unknown option
+        echo "unknown method: $method"
+        return 1
+        ;;
+  esac
+
+  # Parse the options
+  while [[ $# -gt 0 ]]
+  do
+  key="$1"
+  case $key in
+      -r|--target-realm)
+        realm="$2"
+        shift; shift
+        ;;
+      -s|--set)
+        if [[ $method == "get" ]]; then
+          kcadm::error "set attributes not allowed for get"
+          return 1
+        fi
+
+        attributes+=("$2")
+        shift; shift
+        ;;
+      -d|--delete)
+        deletes+=("$2")
+        shift; shift
+        ;;
+      -f|--file)
+        file=$2
+        shift; shift
+        ;;
+      -b|--body)
+        body="$2"
+        shift; shift
+        ;;
+      -q|--query)
+        queries+=("$2")
+        shift; shift
+        ;;
+      -h|--header)
+        headers+=("$2")
+        shift; shift
+        ;;
+      -o|--output)
+        output_result=true
+        shift;
+        ;;
+      -m|--merge)
+        merge=true
+        shift;
+        ;;
+      -n|--nomerge)
+        no_merge=true
+        shift;
+        ;;
+      -i|--id)
+        return_id=true
+        output_result=true
+        shift;
+        ;;
+      --debug)
+        debug=true
+        shift;
+        ;;
+      --help)
+        kcadm::request_help $method
+        shift;
+        ;;
+      *)    # unknown option
+        if [[ "$1" =~ '^-.*' ]]; then
+          kcadm::error "unknown option $1"
+          return 1
+        fi
+
+        positional+=("$1") # save it in an array for later
+        shift # past argument
+        ;;
+  esac
+  done
+
+  if [[ -z ${positional:+x} ]]; then
+    echo "no resource defined"
+    return 1
+  fi
+
+  set -- "${positional[@]}" # restore positional parameters
+
+  if [[ $# -eq 0 ]]; then
+    echo "no endpoint defined"
+    return 1
+  fi
+
+  # Access token
+  kcadm::ensure_token
+  options+=('-H' "Authorization: Bearer ${KCADM_ACCESS_TOKEN}")
+
+  # Manipulate the resource url
+  local endpoint=${positional[0]}
+  local url="${KCADM_SERVER_URL}/admin"
+  if [[ -n $realm ]]; then
+    url+="/realms/${realm}"
+  fi
+  url+="/${endpoint}"
+
+  if [[ ${#queries[@]} -gt 0 ]]; then
+    local IFS='&'
+    url+="?${queries[*]}"
+    unset IFS
+  fi
+
+  # http json body
+  if [[ "$method" != "get" ]]; then
+    # init json body
+    if [[ -n $file ]]; then
+      if [[ "$file" == '-' ]]; then
+        json=$(cat)
+      else
+        json=$(cat "$file")
+      fi
+    elif [[ -n "$body" ]]; then
+      json=$body
+    else
+      json='{}'
+    fi
+
+    # Merge
+    if [[ "$method" == "update" ]]; then
+      if [[ -z $file && "${#attributes[@]}" -gt 0 && no_merge != true ]]; then
+          merge="true"
+      fi
+
+      # Get the original result
+      if [[ $merge == "true" ]]; then
+        [[ "$debug" == "true" ]] && set -x
+
+        curl_response=$(curl -sL -D - -H "Authorization: Bearer ${KCADM_ACCESS_TOKEN}" "$url")
+        exit_code=$?
+
+        [[ "$debug" == "true" ]] && set +x
+
+        if [[ $exit_code -ne 0 ]]; then
+          kcadm::error "unknown error"
+          return $exit_code
+        fi
+
+        result=$(curl::parse_response <<<"$curl_response")
+        exit_code=$?
+
+        if [[ $exit_code -ne 0 ]]; then
+          [[ -n "$result" ]] && echo $result
+          return $exit_code
+        fi
+
+        # merge the two json
+        json=$(json::merge "$result" "$json")
+      fi
+    fi
+
+    # Attributes
+    for attribute in "${attributes[@]}"; do
+      if [[ $attribute =~ ^([^+=]+)=(.+) ]]; then
+        # match attribute
+        json=$(echo "$json" | json::set "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}")
+      elif [[ $attribute =~ ^([^+=]+)\+=(.+) ]]; then
+        # match list
+        if [[ $method == "update" || $method == "create" ]]; then
+          json=$(echo "$json" | json::append "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}")
+        else
+          kcadm::error "wrong attribute: $attribute"
+          return 1
+        fi
+      else
+        kcadm::error "wrong attribute: $attribute"
+        return 1
+      fi
+    done
+    options+=("--data" "$json")
+  fi
+
+  # execute curl
+
+  [[ "$debug" == "true" ]] && set -x
+
+  curl_response=$(curl -sL -D - "${options[@]}" "$url")
+  exit_code=$?
+  [[ "$debug" == "true" ]] && set +x
+
+  if [[ $exit_code -ne 0 ]]; then
+    kcadm::error "unknown error"
+    return $exit_code
+  fi
+
+  # For get request, output the request directly
+  if [[ $method == 'get' ]]; then
+    curl::parse_response <<<"$curl_response"
+    return $?
+  else
+    # For non-get request, consume the output for non-get request
+    result=$(curl::parse_response <<<"$curl_response")
+    exit_code=$?
+    if [[ $exit_code -ne 0 ]]; then
+      [[ -n "$result" ]] && echo $result
+      return $exit_code
+    fi
+
+    if [[ ${output_result} == true ]]; then
+      local location=$(echo "$curl_response" | tr -d '\r' | grep -i '^location' | tail -1 | cut -d' ' -f2 )
+
+      if [[ -z "$location" ]]; then
+        kcadm::error "Created resource not found"
+        return 1
+      else
+        if [[ ${return_id} == true ]]; then
+          echo "${location}" | awk -F/ '{print $NF}'
+        else
+          curl -s -H "Authorization: Bearer ${KCADM_ACCESS_TOKEN}" ${location}
+        fi
+      fi
+    fi
+  fi
+}
+
+kcadm::set_password_help() {
+  cat \
+<<EOF
+Usage: kcadm set-password [ARGUMENTS]
+
+Command to reset user's password
+
+Arguments
+
+  -r, --target-realm REALM  Target realm to issue requests against if not the one authenticated against
+      --username USERNAME       Identify target user by 'username'
+      --userid ID               Identify target user by 'id'
+      -p, --new-password        New password to set. If not specified you will be prompted for it.
+      -t, --temporary           Make the new password temporary - user has to change it on next logon
+
+Examples
+
+Set new temporary password for the user:
+  $ kcadm.sh set-password -r demorealm --username myuser --new-password NEWPASS -t
+
+EOF
+
+  exit 0
+}
+
+kcadm::set_password () {
+  local realm
+  local username
+  local uid
+  local password
+  local temporary=false
+  local admin_root="${KCADM_SERVER_URL}/admin"
+
+  # Parse the options
+  while [[ $# -gt 0 ]]
+  do
+  key="$1"
+  case $key in
+    -r|--target-realm)
+      realm="$2"
+      shift; shift
+      ;;
+    --username)
+      username="$2"
+      shift; shift
+      ;;
+    --uid)
+      uid="$2"
+      shift; shift
+      ;;
+
+    -p|--new-password)
+      password="$2"
+      shift; shift
+      ;;
+    -t|--temporary)
+      temporary=true
+      shift;
+      ;;
+    --help)
+      kcadm::set_password_help
+      shift;
+      ;;
+    *)    # unknown option
+      if [[ $1 =~ '^-.*' ]]; then
+        kcadm::error "unknown option $1"
+        return 1
+      fi
+
+      positional+=("$1") # save it in an array for later
+      shift # past argument
+      ;;
+  esac
+  done
+
+  if [[ -z "${password}" ]]; then
+    kcadm::error "no password given"
+    return 1
+  fi
+
+  if [[ -n "$username" ]]; then
+    curl -s "${admin_root}/realms/${realm}/users?=${username}"
+    result=$(kcadm::request get -r ${realm} -q username="${username}" users)
+    uid=$(echo "$result" | jq -r '.[].id')
+  elif [[ -n "$uid" ]]; then
+    subjecttype=users
+  else
+    kcadm::error "no username or uid specified"
+    return 1
+  fi
+
+  local request="{\"type\":\"password\",\"value\":\"${password}\",\"temporary\":${temporary}}"
+  kcadm::request update -r "${realm}" -b "$request" "users/${uid}/reset-password"
+
+  return $?
+}
+
+kcadm::members_help() {
+  cat \
+<<EOF
+Usage: kcadm <get-members|add-members|remove-members> [ARGUMENTS]
+
+Command to manage members
+
+Arguments
+
+  -r, --target-realm REALM  Target realm to issue requests against if not the one authenticated against
+      --uusername           User's 'username'. If more than one user exists with the same username
+                            you'll have to use --uid to specify the target user
+      --uid                 User's 'id' attribute
+      --gname               Group's 'name'. If more than one group exists with the same name you'll have
+                            to use --gid, or --gpath to specify the target group
+      --gpath               Group's 'path' attribute
+      --gid                 Group's 'id' attribute
+
+
+Examples
+
+Get all realms:
+  $ kcadm get-members -r demorealm --gname mygroup
+
+Get all realms by path:
+  $ kcadm get-members -r demorealm --gpath /mygroup
+
+Add user to group:
+  $ kcadm add-members -r demorealm --uusername myuser --gname mygroup
+
+Remove user from group:
+  $ kcadm remove-members -r demorealm --uusername myuser --gname mygroup
+
+EOF
+
+  exit 0
+}
+
+kcadm::members() {
+  local realm
+  local uusername
+  local uid
+  local gname
+  local gpath
+  local gid
+  local admin_root="${KCADM_SERVER_URL}/admin"
+
+  local method=$1
+  shift
+
+  # Parse the options
+  while [[ $# -gt 0 ]]
+  do
+  key="$1"
+  case $key in
+    -r|--target-realm)
+      realm="$2"
+      shift; shift
+      ;;
+    --uusername)
+      uusername="$2"
+      shift; shift
+      ;;
+    --uid)
+      uid="$2"
+      shift; shift
+      ;;
+    --gname)
+      gname="$2"
+      shift; shift
+      ;;
+    --gpath)
+      gpath="$2"
+      shift; shift
+      ;;
+    --gid)
+      gid="$2"
+      shift; shift
+      ;;
+    --help)
+      kcadm::members_help $method
+      ;;
+    *)    # unknown option
+      if [[ $1 =~ '^-.*' ]]; then
+        kcadm::error "unknown option $1"
+        return 1
+      fi
+
+      positional+=("$1") # save it in an array for later
+      shift # past argument
+      ;;
+  esac
+  done
+
+  # user
+  if [[ "$method" != "get" ]]; then
+    if [[ -n "$uusername" ]]; then
+      uid=$(kcadm::get_user -r ${realm} --username "${uusername}" --id)
+    elif [[ -n "$uid" ]]; then
+      true
+    else
+      kcadm::error "no user specified"
+      return 1
+    fi
+  fi
+
+  # group
+  if [[ -n "$gname" ]]; then
+    gid=$(kcadm::get_group -r ${realm} --name "${gname}" --id)
+  elif [[ -n "$gpath" ]]; then
+    gid=$(kcadm::get_group -r ${realm} --path "${gpath}" --id)
+  elif [[ -n "$gid" ]]; then
+    true
+  else
+    kcadm::error "no group specified"
+    return 1
+  fi
+
+  if [[ $method == "add" ]]; then
+    kcadm::request update -r ${realm} "users/${uid}/groups/${gid}"
+  elif [[ $method == "remove" ]]; then
+    kcadm::request delete -r ${realm} "users/${uid}/groups/${gid}"
+  else
+    kcadm::request get -r ${realm} "groups/${gid}/members"
+  fi
+}
+
+kcadm::roles_help() {
+  cat \
+<<EOF
+Usage: kcadm <get-roles|add-roles|remove-roles> [ARGUMENTS]
+
+Command to manage roles
+
+Arguments
+
+  -r, --target-realm REALM  Target realm to issue requests against if not the one authenticated against
+      --uusername           User's 'username'. If more than one user exists with the same username
+                            you'll have to use --uid to specify the target user
+      --uid                 User's 'id' attribute
+      --gname               Group's 'name'. If more than one group exists with the same name you'll have
+                            to use --gid, or --gpath to specify the target group
+      --gpath               Group's 'path' attribute
+      --gid                 Group's 'id' attribute
+      --cclientid           Client's 'clientId' attribute
+      --cid                 Client's 'id' attribute
+      --rolename            Role's 'name' attribute
+      --roleid              Role's 'id' attribute
+
+
+Examples
+
+Get all realm roles for user
+  $ kcadm get-roles -r demorealm --uusername myuser
+
+Get all client roles of a given client for user
+  $ kcadm get-roles -r demorealm --uusername myuser --clientid realm-management
+
+Get all realm roles for group
+  $ kcadm get-roles -r demorealm --gname myuser
+
+Get all realm roles for service account myclient
+  $ kcadm get-roles -r demorealm --uusername service-account-myclient
+
+Add realm roles to a user
+  $ kcadm add-roles -r demorealm --uusername myuser --rolename role1 --rolename role2
+
+Remove realm roles from a user
+  $ kcadm remove-roles -r demorealm --uusername myuser --rolename role1
+
+EOF
+
+  exit 0
+}
+
+kcadm::roles() {
+  local realm
+  local uusername
+  local uid
+  local gname
+  local gpath
+  local gid
+  local cclientid
+  local cid
+  local -a rolenames
+  local -a roleids
+  local -a roles
+  local rolefrom
+  local subjecttype
+  local subjectid
+  local admin_root="${KCADM_SERVER_URL}/admin"
+
+  local method=$1
+  shift
+
+  # Parse the options
+  while [[ $# -gt 0 ]]
+  do
+  key="$1"
+  case $key in
+    -r|--target-realm)
+      realm="$2"
+      shift; shift
+      ;;
+    --uusername)
+      uusername="$2"
+      shift; shift
+      ;;
+    --uid)
+      uid="$2"
+      shift; shift
+      ;;
+    --gname)
+      gname="$2"
+      shift; shift
+      ;;
+    --gpath)
+      gpath="$2"
+      shift; shift
+      ;;
+    --gid)
+      gid="$2"
+      shift; shift
+      ;;
+    --cclientid)
+      cclientid="$2"
+      shift; shift
+      ;;
+    --cid)
+      cid="$2"
+      shift; shift
+      ;;
+    --rolename)
+      rolenames+=("$2")
+      shift; shift
+      ;;
+    --roleid)
+      roleids+=("$2")
+      shift; shift
+      ;;
+    --help)
+      kcadm::roles_help
+      ;;
+    *)    # unknown option
+      if [[ $1 =~ '^-.*' ]]; then
+        kcadm::error "unknown option $1"
+        return 1
+      fi
+
+      positional+=("$1") # save it in an array for later
+      shift # past argument
+      ;;
+  esac
+  done
+
+  # user and group
+  if [[ -n "$uusername" ]]; then
+    subjecttype=users
+    subjectid=$(kcadm::get_user -r ${realm} --username "${uusername}" --id)
+  elif [[ -n "$uid" ]]; then
+    subjecttype=users
+    subjectid=${uid}
+  elif [[ -n "$gname" ]]; then
+    subjecttype=groups
+    subjectid=$(kcadm::get_group -r ${realm} --name "${gname}" --id)
+  elif [[ -n "$gpath" ]]; then
+    subjecttype=groups
+    subjectid=$(kcadm::get_group -r ${realm} --path "${gpath}" --id)
+  elif [[ -n "$gid" ]]; then
+    subjecttype=groups
+    subjectid=${gid}
+  else
+    kcadm::error "no user or group specified"
+    return 1
+  fi
+
+  # Roles
+  if [[ -n "$cclientid" ]]; then
+    cid=$(kcadm::get_client -r ${realm} --clientid "$cclientid" --id)
+    rolefrom="clients/$cid"
+  elif [[ -n "$cid" ]]; then
+    rolefrom="clients/$cid"
+  else
+    rolefrom="realm"
+  fi
+
+  local roleset
+  local requestMethod
+  if [[ $method == "add" ]]; then
+    roleset='/available'
+    requestMethod='create'
+  elif [[ $method == "remove" ]]; then
+    roleset=''
+    requestMethod='delete'
+  else
+    roleset=''
+  fi
+
+  result=$(kcadm::request get -r "${realm}" "${subjecttype}/${subjectid}/role-mappings/${rolefrom}${roleset}")
+  for rolename in "${rolenames[@]}"; do
+    role=$(echo "$result" | jq -c ".[] | select(.name==\"${rolename}\")")
+    if [[ -n "$role" ]]; then
+      roles+=("$role")
+    fi
+  done
+
+  if [[ $method == "add" || $method == "remove" ]]; then
+    local IFS=','
+    request="[${roles[*]}]"
+    unset IFS
+    kcadm::request $requestMethod -r "${realm}" -b "$request" "${subjecttype}/${subjectid}/role-mappings/${rolefrom}"
+  else
+    kcadm::request get -r "${realm}" "${subjecttype}/${subjectid}/role-mappings/${rolefrom}"
+  fi
+}
+
+kcadm::scopes_help() {
+  cat \
+<<EOF
+Usage: kcadm <get-scopes|add-scopes|remove-scopes> [ARGUMENTS]
+
+Command to manage scopes
+
+Arguments
+
+  -r, --target-realm REALM  Target realm to issue requests against if not the one authenticated against
+      --clientid            User's 'username'. If more than one user exists with the same username
+                            you'll have to use --uid to specify the target user
+      --cid                 User's 'id' attribute
+      --roleclientid        Client's 'clientId' attribute of client role
+      --rolecid             Client's 'id' attribute of client role
+      --rolename            Role's 'name' attribute
+      --roleid              Role's 'id' attribute
+
+
+Examples
+
+Get all realm scopes for client
+  $ kcadm get-scopes -r demorealm --clientid myclient
+
+Get all client scopes of a given client for a client
+  $ kcadm get-scopes -r demorealm --roleclientid realm-management --clientid myclient
+
+Add realm scopes to a client
+  $ kcadm add-scopes -r demorealm --clientid myclient --rolename role1 --rolename role2
+
+Remove realm scopes from a client
+  $ kcadm remove-scopes -r demorealm --clientid myclient --rolename role1
+
+EOF
+
+  exit 0
+}
+
+kcadm::scopes () {
+  local realm
+  local clientid
+  local cid
+  local roleclientid
+  local rolecid
+  local -a rolenames
+  local -a roleids
+  local -a roles
+  local rolefrom
+  local admin_root="${KCADM_SERVER_URL}/admin"
+
+  local method=$1
+  shift
+
+  # Parse the options
+  while [[ $# -gt 0 ]]
+  do
+  key="$1"
+  case $key in
+    -r|--target-realm)
+      realm="$2"
+      shift; shift
+      ;;
+    --clientid)
+      clientid="$2"
+      shift; shift
+      ;;
+    --cid)
+      cid="$2"
+      shift; shift
+      ;;
+    --roleclientid)
+      roleclientid="$2"
+      shift; shift
+      ;;
+    --rolecid)
+      rolecid="$2"
+      shift; shift
+      ;;
+    --rolename)
+      rolenames+=("$2")
+      shift; shift
+      ;;
+    --roleid)
+      roleids+=("$2")
+      shift; shift
+      ;;
+    --help)
+      kcadm::scopes_help
+      shift
+      ;;
+    *)    # unknown option
+      if [[ $1 =~ '^-.*' ]]; then
+        kcadm::error "unknown option $1"
+        return 1
+      fi
+
+      positional+=("$1") # save it in an array for later
+      shift # past argument
+      ;;
+  esac
+  done
+
+  # client
+  if [[ -n "$clientid" ]]; then
+    cid=$(kcadm::get_client -r "${realm}" --clientid "${clientid}" --id)
+  fi
+
+  if [[ -z "$cid" ]]; then
+    kcadm::error "client not found"
+    return 1
+  fi
+
+  # roles
+  if [[ -n "$roleclientid" ]]; then
+    rolecid=$(kcadm::get_client -r "${realm}" --clientid ${roleclientid} --id)
+    rolefrom="clients/$rolecid"
+  elif [[ -n "$rolecid" ]]; then
+    rolefrom="clients/$rolecid"
+  else
+    rolefrom="realm"
+  fi
+
+  local roleset
+  local requestMethod
+  if [[ $method == "add" ]]; then
+    roleset='/available'
+    requestMethod='create'
+  elif [[ $method == "remove" ]]; then
+    roleset=''
+    requestMethod='delete'
+  else
+    roleset=''
+  fi
+
+  result=$(kcadm::request get -r "${realm}" "clients/${cid}/scope-mappings/${rolefrom}${roleset}")
+  for rolename in "${rolenames[@]}"; do
+    role=$(echo "$result" | jq -c ".[] | select(.name==\"${rolename}\")")
+    if [[ -n "$role" ]]; then
+      roles+=("$role")
+    fi
+  done
+
+  if [[ $method == "add" || $method == "remove" ]]; then
+    local IFS=','
+    request="[${roles[*]}]"
+    unset IFS
+    kcadm::request $requestMethod -r "${realm}" -b "$request" "clients/${cid}/scope-mappings/${rolefrom}"
+  else
+    kcadm::request get -r "${realm}" "clients/${cid}/scope-mappings/${rolefrom}"
+  fi
+}
+
+kcadm::get_user_help() {
+  cat \
+<<EOF
+Usage: kcadm <get-user> [ARGUMENTS]
+
+Command to get a single user
+
+Arguments
+
+Arguments
+
+  -r, --target-realm REALM  Target realm to issue requests against if not the one authenticated against
+      --username            User's 'username' attribute
+      --uid                 User's 'id' attribute
+  -i, --id                  Output the id instead of the full content
+
+Examples
+
+Get a user by name
+  $ kcadm get-user -r demorealm --username myuser
+
+EOF
+
+  exit 0
+}
+
+kcadm::get_user () {
+  local uid
+  local username
+  local -a options
+  local result
+  local return_id=false
+
+  # Parse the options
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case $key in
+      --username)
+        username="$2"
+        shift; shift
+        ;;
+      --uid)
+        uid="$2"
+        shift; shift
+        ;;
+      -i|--id)
+        return_id=true
+        shift
+        ;;
+      -h|--help)
+        kcadm::get_user_help
+        shift
+        ;;
+      *)
+        options+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -n "$uid" ]]; then
+    result=$(kcadm::request get "${options[@]}" "users/${uid}")
+  elif [[ -n "$username" ]]; then
+    options+=("-q" "username=$username")
+    result=$(kcadm::request get "${options[@]}" "users" | jq -c '.[]' | head -1)
+  else
+    kcadm::get_user_help
+  fi
+
+  if [[ "$return_id" == "true" ]]; then
+    result=$(echo "$result" | jq -r '.id')
+  fi
+
+  [[ -n "$result" ]] && echo "$result"
+}
+
+kcadm::get_group_help() {
+  cat \
+<<EOF
+Usage: kcadm <get-group> [ARGUMENTS]
+
+Command to get a single group
+
+Arguments
+
+Arguments
+
+  -r, --target-realm REALM  Target realm to issue requests against if not the one authenticated against
+      --name                Group's 'name' attribute
+      --path                Group's 'path' attribute
+      --gid                 Group's 'id' attribute
+  -i, --id                  Output the id instead of the full content
+
+Examples
+
+Get a group by name
+  $ kcadm get-grops -r demorealm --name mygroup
+
+Get a group by path
+  $ kcadm get-groups -r demorealm --path /mygroup
+
+EOF
+
+  exit 0
+}
+kcadm::get_group () {
+  local gid
+  local path
+  local result
+  local return_id=false
+
+  # Parse the options
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case $key in
+      --name)
+        path="/$2"
+        shift; shift
+        ;;
+      --path)
+        path="$2"
+        shift; shift
+        ;;
+      --gid)
+        gid="$2"
+        shift; shift
+        ;;
+      -i|--id)
+        return_id=true
+        shift
+        ;;
+      -h|--help)
+        kcadm::get_group_help
+        shift
+        ;;
+      *)
+        options+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$gid" && -z "$path" ]]; then
+    kcadm::get_group_help
+  fi
+
+  if [[ -n "$gid" ]]; then
+    result=$(kcadm::request get "${options[@]}" groups/${gid})
+  else
+    result=$(kcadm::request get "${options[@]}" groups | jq -c  ".[] | recurse(.subGroups[]) | select(.path == \"${path}\")")
+  fi
+
+  if [[ "$return_id" == "true" ]]; then
+    result=$(echo "$result" | jq -r '.id')
+  fi
+
+  [[ -n "$result" ]] && echo "$result"
+}
+
+kcadm::get_client_help() {
+  cat \
+<<EOF
+Usage: kcadm <get-client> [ARGUMENTS]
+
+Command to get a single client
+
+Arguments
+
+Arguments
+
+  -r, --target-realm REALM  Target realm to issue requests against if not the one authenticated against
+      --clientid            Client's 'clientId' attribute
+      --cid                 Client's 'id' attribute
+
+
+Examples
+
+Get all realm roles for user
+  $ kcadm get-client -r demorealm --clientid realm-management
+
+EOF
+
+  exit 0
+}
+
+kcadm::get_client () {
+  local cid
+  local clientid
+  local -a options
+  local result
+  local return_id=false
+
+  # Parse the options
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case $key in
+      --clientid)
+        clientid="$2"
+        shift; shift
+        ;;
+      --cid)
+        cid="$2"
+        shift; shift
+        ;;
+      -i|--id)
+        return_id=true
+        shift
+        ;;
+      -h|--help)
+        kcadm::get_client_help
+        shift
+        ;;
+      *)
+        options+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -n "$cid" ]]; then
+    result=$(kcadm::request get "${options[@]}" "clients/${cid}")
+  elif [[ -n "$clientid" ]]; then
+    options+=("-q" "clientId=$clientid")
+    result=$(kcadm::request get "${options[@]}" "clients" | jq -c '.[]' | head -1)
+  else
+    kcadm::get_client_help
+  fi
+
+  if [[ "$return_id" == "true" ]]; then
+    result=$(echo "$result" | jq -r '.id')
+  fi
+
+  [[ -n "$result" ]] && echo "$result"
+}
+
+
+help_main() {
+  echo "Keycloak Admin CLI"
+  echo ""
+  echo "Use 'kcadm config credentials' command with username and password to start a session against a specific"
+  echo "server and realm."
+  echo ""
+  echo "For example:"
+  echo ""
+  echo "  $ kcadm config credentials --server http://localhost:8080/auth --realm master --user admin"
+  echo "  Enter password:"
+  echo "  Logging into http://localhost:8080/auth as user admin of realm master"
+  echo ""
+  echo "Any configured username can be used for login, but to perform admin operations the user"
+  echo "needs proper roles, otherwise operations will fail."
+  echo ""
+  echo "Usage: kcadm COMMAND [ARGUMENTS]"
+  echo ""
+  echo "Commands:"
+  echo "  config         Set up credentials, and other configuration settings using the config file"
+  echo "  create         Create new resource"
+  echo "  get            Get a resource"
+  echo "  update         Update a resource"
+  echo "  delete         Delete a resource"
+  echo "  get-members    List members for a group"
+  echo "  add-members    Add user to a group"
+  echo "  remove-members Remove user from a group"
+  echo "  get-roles      List roles for a user or a group"
+  echo "  add-roles      Add role to a user or a group"
+  echo "  remove-roles   Remove role from a user or a group"
+  echo "  get-scopes     List scopes for a client"
+  echo "  add-scopes     Add scopes to a client"
+  echo "  remove-scopes  Remove scopes from a client"
+  echo "  set-password   Re-set password for a user"
+  echo "  get-user       Get a single user"
+  echo "  get-group      Get a single group"
+  echo "  get-clinet     Get a single client"
+  echo "  help           This help"
+  echo ""
+  echo "Use 'kcadm help <command>' for more information about a given command.  "
+}
+
+main() {
+  local command=$1
+  shift
+
+  if [[ "$command" == help ]]; then
+    command=$1
+    shift
+
+    local positional=$@
+    positional+=("--help")
+    set -- "${positional[@]}"
+  fi
+
+  case $command in
+    config)
+      kcadm::config "$@"
+      ;;
+    create)
+      kcadm::request create "$@"
+      ;;
+    get)
+      kcadm::request get "$@"
+      ;;
+    update)
+      kcadm::request update "$@"
+      ;;
+    delete)
+      kcadm::request delete "$@"
+      ;;
+    set-password)
+      kcadm::set_password "$@"
+      ;;
+    get-members)
+      kcadm::members get "$@"
+      ;;
+    add-members)
+      kcadm::members add "$@"
+      ;;
+    remove-members)
+      kcadm::members remove "$@"
+      ;;
+    get-roles)
+      kcadm::roles get "$@"
+      ;;
+    add-roles)
+      kcadm::roles add "$@"
+      ;;
+    remove-roles)
+      kcadm::roles remove "$@"
+      ;;
+    get-scopes)
+      kcadm::scopes get "$@"
+      ;;
+    add-scopes)
+      kcadm::scopes add "$@"
+      ;;
+    remove-scopes)
+      kcadm::scopes remove "$@"
+      ;;
+    get-user)
+      kcadm::get_user "$@"
+      ;;
+    get-group)
+      kcadm::get_group "$@"
+      ;;
+    get-client)
+      kcadm::get_client "$@"
+      ;;
+    *)
+      help_main
+  esac
+}
+
+if [[ $KCADM_TEST != "true" ]]; then
+  main "$@"
+fi

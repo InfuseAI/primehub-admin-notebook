@@ -209,20 +209,47 @@ Run the cell to clean up orphan PVC.
 
 ```python
 import ipywidgets
+import requests
 import time
 
-from primehub.graphql import *
 from primehub.orphanDetector import *
 from primehub.notebookWidget import *
 
-url = !kubectl get deploy -n hub primehub-console-ui -o json | jq -r '.spec.template.spec.containers[0].env[] | select(.name == "CANNER_CMS_HOST") | .value'
+def get_primehub_groups(url, secret):
+    payload = {'query': '{groups{name enabledSharedVolume}'}
+    headers = {'Authorization': 'Bearer %s'%secret}
+    response = requests.post(url, payload, headers=headers)
+    primehub_info = response.json().get('data',{})
+    return primehub_info.get('groups', [])
+
+def get_primehub_users():
+    kc_url = !kubectl get cm -n hub primehub-hub-config -o json | jq -r ".data.\"values.yaml\"" | grep '^  url:'
+    kc_url = kc_url[0].replace('  url: ','')
+    kc_realm = !kubectl get cm -n hub primehub-hub-config -o json | jq -r ".data.\"values.yaml\"" | grep '^  realm:'
+    kc_realm = kc_realm[0].replace('  realm: ','')
+    kc_password = !kubectl get secret -n hub primehub-bootstrap -o jsonpath='{.data.kcpassword}' | base64 -d 
+    kc_password = kc_password[0]
+
+    !kcadm config credentials --server $kc_url --realm master --user keycloak --password $kc_password 
+    users = !kcadm get -r $kc_realm users | jq -r '.[].username'
+    return users
+
+def get_primehub_datasets():
+    !kubectl get dataset -n hub  -o jsonpath='{range .items[*]}{@.metadata.name}{" "}{@.spec.type}{"\\n"}{end}' | grep ' pv$'
+    datasets = !kubectl get dataset -n hub  -o jsonpath='{range .items[*]}{@.metadata.name}{" "}{@.spec.type}{"\n"}{end}' | grep " pv$"
+    datasets = [d.split(' ')[0] for d in datasets]
+    return datasets
+
+url = !kubectl get deploy -n hub primehub-graphql -o json | jq -r '.spec.template.spec.containers[0].env[] | select(.name == "GRAPHQL_HOST") | .value'
 url = url[0] + '/api/graphql'
 secret = !kubectl get secret -n hub primehub-console-graphql-shared-secret -o jsonpath='{.data.graphql-secret}' | base64 -d
 secret = secret[0]
-primehub_info = get_primehub_info(url, secret)
+
+groups=get_primehub_groups(url, secret)
+datasets=get_primehub_datasets()
+users=get_primehub_users()
 
 datasets=primehub_info.get('datasets')
-groups=primehub_info.get('groups')
 users=primehub_info.get('users')
 
 dataset_pvcs = !kubectl get pvc -n hub | grep hub-nfs-dataset | cut -d' ' -f1
