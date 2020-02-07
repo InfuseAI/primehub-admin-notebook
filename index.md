@@ -249,9 +249,6 @@ groups=get_primehub_groups(url, secret)
 datasets=get_primehub_datasets()
 users=get_primehub_users()
 
-datasets=primehub_info.get('datasets')
-users=primehub_info.get('users')
-
 dataset_pvcs = !kubectl get pvc -n hub | grep hub-nfs-dataset | cut -d' ' -f1
 group_pvcs = !kubectl get pvc -n hub | grep hub-nfs-project | cut -d' ' -f1
 user_pvcs = !kubectl get pvc -n hub | grep claim- | cut -d' ' -f1
