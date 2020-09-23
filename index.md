@@ -227,10 +227,18 @@ def get_primehub_users():
     kc_url = kc_url[0].replace('  url: ','')
     kc_realm = !kubectl get cm -n hub primehub-hub-config -o json | jq -r ".data.\"values.yaml\"" | grep '^  realm:'
     kc_realm = kc_realm[0].replace('  realm: ','')
-    kc_password = !kubectl get secret -n hub primehub-bootstrap -o jsonpath='{.data.kcpassword}' | base64 -d 
-    kc_password = kc_password[0]
 
-    !kcadm config credentials --server $kc_url --realm master --user keycloak --password $kc_password 
+    kc_password = !kubectl get secret -n hub primehub-bootstrap -o jsonpath='{.data.kcpassword}' | base64 -d
+    if len(kc_password) > 0:
+        kc_password = kc_password[0]
+        !kcadm config credentials --server $kc_url --realm master --user keycloak --password $kc_password
+    else:
+        admin_ui_client_id = !kubectl -n hub get secret primehub-client-admin-ui -o jsonpath='{.data.client_id}' | base64 -d
+        admin_ui_client_id = admin_ui_client_id[0]
+        admin_ui_client_secret = !kubectl -n hub get secret primehub-client-admin-ui -o jsonpath='{.data.client_secret}' | base64 -d
+        admin_ui_client_secret = admin_ui_client_secret[0]
+        !kcadm config credentials --server $kc_url --realm $kc_realm --client $admin_ui_client_id --secret $admin_ui_client_secret
+
     users = !kcadm get -r $kc_realm users | jq -r '.[].username'
     return users
 
@@ -240,8 +248,7 @@ def get_primehub_datasets():
     datasets = [d.split(' ')[0] for d in datasets]
     return datasets
 
-url = !kubectl get deploy -n hub primehub-graphql -o json | jq -r '.spec.template.spec.containers[0].env[] | select(.name == "GRAPHQL_HOST") | .value'
-url = url[0] + '/api/graphql'
+url = 'http://primehub-graphql.hub/api/graphql'
 secret = !kubectl get secret -n hub primehub-console-graphql-shared-secret -o jsonpath='{.data.graphql-secret}' | base64 -d
 secret = secret[0]
 
